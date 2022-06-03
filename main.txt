@@ -1,0 +1,162 @@
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <Adafruit_NeoPixel.h>
+#include <RtcDS3231.h>
+#include <Servo.h>
+
+//Define screen size
+#define SCREEN_WIDTH 128 // OLED display width,  in pixels
+#define SCREEN_HEIGHT 64 // OLED display height, in pixels
+
+// Declare an SSD1306 display object connected to I2C
+Adafruit_SSD1306 oled(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+
+// Create new RTC module
+RtcDS3231<TwoWire> rtcModule(Wire);
+
+//Decalare global variables
+int hours;
+int minutes;
+int seconds;
+int magTime = 0;
+int magCounter = 0;
+int startHours;
+int startMinutes;
+int startSeconds;
+int setHours = 0;
+int setMinutes = 0;
+int setSeconds = 0;
+int count;
+float speeds[5] = {0, 0, 0, 0, 0};
+float totVelocity = 0;
+bool isMagnetic = false;
+float temp;
+int state = 1;
+float tempPos = 0;
+const int hallPin = 2;
+const int startButton = 5;
+const int pauseButton = 4;
+const int resetButton = 3;
+
+
+void setup() {
+
+  //Initialize serial print
+  Serial.begin(9600);
+  
+  //initialize oled
+  if (!oled.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println(F("SSD1306 allocation failed"));
+    while (true);
+  }
+
+  //Initialize rtc
+  rtcModule.Begin();
+  // Update RTC module time to compilation time
+  RtcDateTime compiled = RtcDateTime(__DATE__, __TIME__);
+  rtcModule.SetDateTime(compiled);
+
+  //Set pinmode
+  pinMode(hallPin, INPUT);
+  pinMode(startButton, INPUT);
+  pinMode(pauseButton, INPUT);
+  pinMode(resetButton, INPUT);
+}
+void loop(void) {
+  rtcUpdate();
+  magnetic();
+  measureTime();
+  draw();
+}
+
+//Draw text on oled-screen
+void draw(void) {
+  oled.clearDisplay();          // clear display
+  oled.setTextSize(2);          // text size
+  oled.setTextColor(WHITE);     // text colour
+  oled.setCursor(0, 10);        // position to display
+  if (count == 0) {
+    oled.println(String(setHours) + ": " + String(setMinutes) + ": " + String(setSeconds));
+  }else {
+    oled.println(String(setHours) + ": " + String(setMinutes) + ": " + String(setSeconds));
+  }
+  oled.println(String(temp) + "C"); 
+  //oled.println(String(state));
+  oled.println(totVelocity);
+  oled.display();    
+}
+
+//Use magnetic hall sensor to define current velocity (if the wheel is 622mm in diameter)
+void magnetic() {
+  state = !(digitalRead(hallPin));
+  int magDiffTime;
+  if (state == true) {
+    if (isMagnetic == false) {
+      magCounter += 1;
+      magCounter = magCounter % 5;
+      int newMagTime = millis();
+      magDiffTime = newMagTime - magTime;
+      float velocity = (0.622*3.14159*3.6)/(max(magDiffTime,0.0001)/1000);
+      speeds[magCounter] = velocity;
+      isMagnetic = true;
+    }
+  }else {
+    if (isMagnetic == true) {
+      isMagnetic = false;
+    }
+  }
+  float speedSum = 0;
+  for (int i=0; i<5; ++i) {
+    speedSum += speeds[i];
+  }
+  totVelocity = speedSum/5;
+}
+
+//Get time and temperature with RTC-module
+void rtcUpdate(void) {
+  //gets date and time
+  RtcDateTime now = rtcModule.GetDateTime();
+  RtcTemperature rtcTemp = rtcModule.GetTemperature();
+
+  temp = rtcTemp.AsFloatDegC(); //current temperature
+  hours = int(now.Hour()); //current hour
+  minutes = int(now.Minute()); //current minute
+  seconds = int(now.Second()); //current second
+  tempPos = map(temp, 15, 25, 0, 140); //maps temperature to servo degrees
+}
+
+//Define timer
+void measureTime(void) {
+  if (digitalRead(resetButton) == HIGH) {
+    count = 0;                             //Stops counting
+    setHours = 0;
+    setMinutes = 0;
+    setSeconds = 0;
+  }
+  if (digitalRead(startButton) == HIGH) {
+    count = 1;                             //Starts counting
+    startHours = hours-setHours;
+    startMinutes = minutes-setMinutes;
+    startSeconds = seconds-setSeconds;
+  }
+  if (digitalRead(pauseButton) == HIGH) {
+    count = 0;                              //Stops counting
+  }
+
+  if (count == 1) {
+    setHours = hours - startHours;
+    if (startMinutes > minutes) {
+      setMinutes = 60 + minutes - startMinutes;
+      setHours -= 1;
+    }else {
+      setMinutes = minutes - startMinutes;
+    }
+    if (startSeconds > seconds) {
+      setSeconds = 60 + seconds - startSeconds;
+      setMinutes -= 1;
+    }else {
+      setSeconds = seconds - startSeconds;
+    }
+  }
+}
